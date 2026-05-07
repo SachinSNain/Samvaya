@@ -1,0 +1,54 @@
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.0
+psycopg2-binary==2.9.9
+
+# Data generation
+faker==21.0.0
+numpy==1.26.2
+pandas==2.1.4
+
+# Normalisation
+rapidfuzz==3.5.2
+indic-transliteration==2.3.57
+metaphone==0.6
+jellyfish==1.0.3
+geopy==2.4.1
+requests==2.31.0
+
+# Entity resolution / ML
+lightgbm==4.1.0
+scikit-learn==1.3.2
+shap==0.44.0
+networkx==3.2.1
+h3==3.7.6
+mlflow==2.9.2
+
+# Activity engine
+python-dateutil==2.8.2
+
+# API
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.2
+python-dotenv==1.0.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# LLM / AI
+google-generativeai>=0.8.0
+groq>=0.9.0
+sentence-transformers>=2.7.0   # F14 embedding — downloads ~400 MB model on first run
+
+# Caching / Task queue
+redis==5.0.1
+celery==5.3.6
+
+# Utilities
+tqdm==4.66.1
+loguru==0.7.2

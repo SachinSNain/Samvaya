@@ -1,0 +1,44 @@
+# Frontend dependencies — not needed in backend image
+frontend/node_modules/
+frontend/build/
+frontend/.next/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test/coverage
+.pytest_cache/
+htmlcov/
+.coverage
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MLflow local artifacts (large, mounted as volume)
+mlflow/
+
+# Logs
+*.log
+logs/

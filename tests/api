@@ -1,0 +1,318 @@
+"""
+Tests for enhanced /api/ubid/list endpoint with filtering capabilities.
+"""
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from src.api.main import app
+from src.database.models import Base, UBIDEntity, UBIDSourceLink, ActivityScore
+from src.database.connection import get_db
+from datetime import datetime
+import uuid
+
+
+# Create in-memory SQLite database for testing
+SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def override_get_db():
+    """Override the database dependency for testing."""
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+
+app.dependency_overrides[get_db] = override_get_db
+client = TestClient(app)
+
+
+@pytest.fixture(scope="function")
+def setup_database():
+    """Create tables and populate with test data."""
+    Base.metadata.create_all(bind=engine)
+    db = TestingSessionLocal()
+    
+    # Create test UBIDs with different characteristics
+    test_data = [
+        {
+            "ubid": "KA-UBID-000001",
+            "pan_anchor": "AAAAA1111A",
+            "gstin_anchors": ["29AAAAA1111A1Z5"],
+            "anchor_status": "ANCHORED",
+            "activity_status": "ACTIVE",
+            "link_count": 2,
+            "departments": ["shop_establishment", "factories"]
+        },
+        {
+            "ubid": "KA-UBID-000002",
+            "pan_anchor": None,
+            "gstin_anchors": [],
+            "anchor_status": "UNANCHORED",
+            "activity_status": "DORMANT",
+            "link_count": 1,
+            "departments": ["labour"]
+        },
+        {
+            "ubid": "KA-UBID-000003",
+            "pan_anchor": "BBBBB2222B",
+            "gstin_anchors": ["29BBBBB2222B1Z5"],
+            "anchor_status": "ANCHORED",
+            "activity_status": "ACTIVE",
+            "link_count": 3,
+            "departments": ["shop_establishment", "factories", "kspcb"]
+        },
+        {
+            "ubid": "KA-UBID-000004",
+            "pan_anchor": "CCCCC3333C",
+            "gstin_anchors": ["29CCCCC3333C1Z5"],
+            "anchor_status": "ANCHORED",
+            "activity_status": "CLOSED_SUSPECTED",
+            "link_count": 4,
+            "departments": ["shop_establishment", "factories", "labour", "kspcb"]
+        },
+    ]
+    
+    for data in test_data:
+        # Create UBID entity
+        entity = UBIDEntity(
+            ubid=data["ubid"],
+            pan_anchor=data["pan_anchor"],
+            gstin_anchors=data["gstin_anchors"],
+            anchor_status=data["anchor_status"],
+            created_at=datetime.utcnow()
+        )
+        db.add(entity)
+        
+        # Create activity score
+        activity = ActivityScore(
+            score_id=str(uuid.uuid4()),
+            ubid=data["ubid"],
+            raw_score=0.8,
+            activity_status=data["activity_status"],
+            is_current=True,
+            computed_at=datetime.utcnow()
+        )
+        db.add(activity)
+        
+        # Create source links
+        for i, dept in enumerate(data["departments"]):
+            link = UBIDSourceLink(
+                link_id=str(uuid.uuid4()),
+                ubid=data["ubid"],
+                source_system=dept,
+                source_record_id=f"{dept}_{data['ubid']}_{i}",
+                confidence=0.95,
+                link_type="auto",
+                linked_by="system",
+                is_active=True,
+                linked_at=datetime.utcnow()
+            )
+            db.add(link)
+    
+    db.commit()
+    db.close()
+    
+    yield
+    
+    # Cleanup
+    Base.metadata.drop_all(bind=engine)
+
+
+def test_list_ubids_no_filters(setup_database):
+    """Test basic list endpoint without filters."""
+    response = client.get("/api/ubid/list")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert "total" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "results" in data
+    assert data["total"] == 4
+    assert len(data["results"]) == 4
+
+
+def test_list_ubids_with_pagination(setup_database):
+    """Test pagination parameters."""
+    response = client.get("/api/ubid/list?page=1&page_size=2")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 4
+    assert data["page"] == 1
+    assert data["page_size"] == 2
+    assert len(data["results"]) == 2
+
+
+def test_list_ubids_filter_by_activity_status(setup_database):
+    """Test filtering by activity status."""
+    response = client.get("/api/ubid/list?activity_status=ACTIVE")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 2
+    for result in data["results"]:
+        assert result["activity_status"] == "ACTIVE"
+
+
+def test_list_ubids_filter_by_multiple_activity_statuses(setup_database):
+    """Test filtering by multiple activity statuses."""
+    response = client.get("/api/ubid/list?activity_status=ACTIVE&activity_status=DORMANT")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 3
+    for result in data["results"]:
+        assert result["activity_status"] in ["ACTIVE", "DORMANT"]
+
+
+def test_list_ubids_filter_by_anchor_status(setup_database):
+    """Test filtering by anchor status."""
+    response = client.get("/api/ubid/list?anchor_status=ANCHORED")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 3
+    for result in data["results"]:
+        assert result["anchor_status"] == "ANCHORED"
+
+
+def test_list_ubids_filter_by_anchor_status_unanchored(setup_database):
+    """Test filtering by unanchored status."""
+    response = client.get("/api/ubid/list?anchor_status=UNANCHORED")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 1
+    assert data["results"][0]["anchor_status"] == "UNANCHORED"
+
+
+def test_list_ubids_filter_by_link_count_exact(setup_database):
+    """Test filtering by exact link count."""
+    response = client.get("/api/ubid/list?link_count=2")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 1
+    assert data["results"][0]["source_record_count"] == 2
+
+
+def test_list_ubids_filter_by_link_count_4_plus(setup_database):
+    """Test filtering by 4+ link count."""
+    response = client.get("/api/ubid/list?link_count=4%2B")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 1
+    assert data["results"][0]["source_record_count"] >= 4
+
+
+def test_list_ubids_filter_by_department(setup_database):
+    """Test filtering by single department."""
+    response = client.get("/api/ubid/list?departments=kspcb")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 2
+    # Both KA-UBID-000003 and KA-UBID-000004 have kspcb
+
+
+def test_list_ubids_filter_by_multiple_departments(setup_database):
+    """Test filtering by multiple departments (AND logic)."""
+    response = client.get("/api/ubid/list?departments=shop_establishment&departments=factories")
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Should return UBIDs that have BOTH shop_establishment AND factories
+    assert data["total"] == 3
+
+
+def test_list_ubids_combined_filters(setup_database):
+    """Test combining multiple filters."""
+    response = client.get(
+        "/api/ubid/list?activity_status=ACTIVE&anchor_status=ANCHORED&link_count=2"
+    )
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 1
+    result = data["results"][0]
+    assert result["activity_status"] == "ACTIVE"
+    assert result["anchor_status"] == "ANCHORED"
+    assert result["source_record_count"] == 2
+
+
+def test_list_ubids_response_includes_anchor_status(setup_database):
+    """Test that response includes anchor_status field."""
+    response = client.get("/api/ubid/list")
+    assert response.status_code == 200
+    data = response.json()
+    
+    for result in data["results"]:
+        assert "anchor_status" in result
+        assert result["anchor_status"] in ["ANCHORED", "UNANCHORED"]
+
+
+def test_list_ubids_invalid_link_count(setup_database):
+    """Test that invalid link_count returns 400 error."""
+    response = client.get("/api/ubid/list?link_count=invalid")
+    assert response.status_code == 400
+    assert "link_count must be one of" in response.json()["detail"]
+
+
+def test_list_ubids_empty_results(setup_database):
+    """Test filtering that returns no results."""
+    response = client.get("/api/ubid/list?activity_status=CLOSED_CONFIRMED")
+    assert response.status_code == 200
+    data = response.json()
+    
+    assert data["total"] == 0
+    assert len(data["results"]) == 0
+
+
+def test_list_ubids_cache_key_includes_filters(setup_database):
+    """Test that different filter combinations use different cache keys."""
+    # First request
+    response1 = client.get("/api/ubid/list?activity_status=ACTIVE")
+    assert response1.status_code == 200
+    data1 = response1.json()
+    
+    # Second request with different filter
+    response2 = client.get("/api/ubid/list?activity_status=DORMANT")
+    assert response2.status_code == 200
+    data2 = response2.json()
+    
+    # Results should be different
+    assert data1["total"] != data2["total"]
+
+
+def test_list_ubids_response_structure(setup_database):
+    """Test that response has correct structure."""
+    response = client.get("/api/ubid/list")
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check top-level structure
+    assert "total" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "results" in data
+    
+    # Check result item structure
+    if len(data["results"]) > 0:
+        result = data["results"][0]
+        assert "ubid" in result
+        assert "display_name" in result
+        assert "pan_anchor" in result
+        assert "gstin_anchors" in result
+        assert "activity_status" in result
+        assert "anchor_status" in result
+        assert "source_record_count" in result

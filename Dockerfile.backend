@@ -1,0 +1,38 @@
+# CUDA 12.8 + cuDNN runtime — matches the RTX A500 host driver (573.44 / CUDA 12.8)
+# Uses the slim Ubuntu 22.04 variant to keep image size reasonable
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+
+WORKDIR /app
+
+# Install Python 3.11 + system deps for psycopg2 and h3
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    gcc \
+    libpq-dev \
+    cmake \
+    libboost-dev \
+    ocl-icd-opencl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.11 the default python/pip
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+ && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+ && python -m pip install --upgrade pip
+
+# Install LightGBM with GPU support first (needs OpenCL headers present)
+# --install-option triggers the CMake GPU build; falls back gracefully on CPU-only envs
+RUN pip install --no-cache-dir lightgbm==4.1.0 --config-settings=cmake.define.USE_GPU=ON || \
+    pip install --no-cache-dir lightgbm==4.1.0
+
+# Install all other dependencies
+COPY requirements.txt .
+# lightgbm is already installed above; skip it in requirements to avoid version conflict
+RUN grep -v "^lightgbm" requirements.txt > /tmp/req_no_lgbm.txt && \
+    pip install --no-cache-dir -r /tmp/req_no_lgbm.txt
+
+COPY . .
+
+# Run Alembic migrations (non-fatal), then start API
+CMD ["sh", "-c", "alembic upgrade head 2>&1 || true; uvicorn src.api.main:app --host 0.0.0.0 --port 8000"]

@@ -1,0 +1,184 @@
+version: "3.9"
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: ubid_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ubid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ubid_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-ubid_platform}
+    # Port not exposed externally — backend connects via internal Docker network
+    # ports:
+    #   - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ubid}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nominatim:
+    image: mediagis/nominatim:4.2
+    container_name: ubid_nominatim
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PBF_URL: https://download.geofabrik.de/asia/india-latest.osm.pbf
+      REPLICATION_URL: https://planet.openstreetmap.org/replication/hour/
+      IMPORT_WIKIPEDIA: "false"
+      IMPORT_TIGER_ADDRESSES: "false"
+    volumes:
+      - nominatim_data:/var/lib/nominatim
+
+  mlflow:
+    image: python:3.11-slim
+    container_name: ubid_mlflow
+    restart: unless-stopped
+    working_dir: /mlflow
+    command: mlflow server --host 0.0.0.0 --port 5000 --default-artifact-root /mlflow/artifacts
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+
+  redis:
+    image: redis:7-alpine
+    container_name: ubid_redis
+    restart: unless-stopped
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: ubid_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ubid}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-ubid_rabbit}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ubid_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ubid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ubid_secret}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ubid_platform}
+      SCRAMBLER_SECRET_KEY: ${SCRAMBLER_SECRET_KEY:-change_me_in_prod}
+      NOMINATIM_URL: http://nominatim:8080
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      THRESHOLD_AUTO_LINK: "0.95"
+      THRESHOLD_REVIEW: "0.75"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      FORCE_LOCAL_ONLY: ${FORCE_LOCAL_ONLY:-false}
+      SKIP_LLM_PARSING: "true"
+      SKIP_SEMANTIC_EMBED: "true"
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ubid}:${RABBITMQ_PASS:-ubid_rabbit}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ubid_celery_worker
+    restart: unless-stopped
+    command: celery -A src.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ubid}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ubid_secret}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ubid_platform}
+      SCRAMBLER_SECRET_KEY: ${SCRAMBLER_SECRET_KEY:-change_me_in_prod}
+      NOMINATIM_URL: http://nominatim:8080
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      THRESHOLD_AUTO_LINK: "0.95"
+      THRESHOLD_REVIEW: "0.75"
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      FORCE_LOCAL_ONLY: ${FORCE_LOCAL_ONLY:-false}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://${RABBITMQ_USER:-ubid}:${RABBITMQ_PASS:-ubid_rabbit}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: ubid_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:8000
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  nominatim_data:
+  mlflow_data:

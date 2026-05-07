@@ -1,0 +1,9 @@
+{
+  "val_auc": 1.0,
+  "val_f1": 0.9985,
+  "threshold_auto_link": 0.95,
+  "trained_at": "2026-05-07T14:22:17.732679+00:00",
+  "model_version": "1.0.0",
+  "train_size": 5259,
+  "val_size": 1315
+}
