@@ -1,6 +1,6 @@
 # Samvaya — Unified Business Identifier (UBID) Platform
 
-> **AI Bharat Hackathon 2025 | Theme 1 — Karnataka Commerce & Industry**
+> **AI Bharat Hackathon 2026 | Theme 1 — Karnataka Commerce & Industry**
 >
 > An end-to-end entity resolution and active business intelligence platform that assigns every Karnataka business a single Unified Business Identifier (UBID) by linking fragmented records across government department systems — without modifying any source system.
 
@@ -591,7 +591,7 @@ See [FUTURE_SCOPE.md](FUTURE_SCOPE.md) for the full roadmap. Key planned improve
 
 ## Team
 
-Built for the **AI Bharat Hackathon 2025** — Karnataka Commerce & Industry, Theme 1.
+Built for the **AI Bharat Hackathon 2026** — Karnataka Commerce & Industry, Theme 1.
 
 ---
 
